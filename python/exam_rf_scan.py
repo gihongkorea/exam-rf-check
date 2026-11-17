@@ -59,6 +59,8 @@ async def scan_ble(seconds=BLE_SCAN_SEC):
     found = await BleakScanner.discover(timeout=seconds, return_adv=True)
     rows = []
     for addr, (dev, adv) in found.items():
+        if adv.rssi is None or adv.rssi >= 0 or adv.rssi <= -127:
+            continue   # 127 등은 '신호세기 측정 실패' 표시값이므로 제외
         name = adv.local_name or dev.name or ""
         maker_ids = [hex(k) for k in adv.manufacturer_data.keys()]
         rows.append({

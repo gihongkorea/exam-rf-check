@@ -190,7 +190,7 @@ const APPLE_TYPES = { 0x02: "iBeacon", 0x05: "AirDrop", 0x07: "근접 페어링 
 const MS_TYPES = { 0x01: "CDP 비콘 (Windows PC·Xbox 등)", 0x03: "Swift Pair (페어링 대기 주변기기)" };
 const NEAR_VIEW = -70;               // '가까운 기기만' 보기 기준
 const MERGE_SEC = 60;                // 이름 없는 근거리 경고 병합 시간
-const STORE_KEY = "examBleBaseline";
+const STORE_KEY = "examBleBaseline_v2";   // v2: 잘못된 신호값(127)이 섞였던 이전 기준선은 자동 폐기
 const $ = id => document.getElementById(id);
 const cfg = () => ({
   near: +$("cNear").value, jump: +$("cJump").value,
@@ -254,6 +254,9 @@ function onAdvertisement(ev){
     mfrRaw: {}, tx: null, appearance: null,
   });
   collectDetail(d, ev, mfrNums);
+  // 안드로이드는 신호세기를 못 쟀을 때 127을 넣어 보냄 → 평균에 섞이면 값이 엉망이 되므로 버림
+  // (실제 BLE 신호세기는 항상 0보다 작음)
+  if (ev.rssi >= 0 || ev.rssi <= -127) { d.bad = (d.bad || 0) + 1; scheduleRender(); return; }
   d.hist.push(ev.rssi);
   if (d.hist.length > 5) d.hist.shift();
   d.last = Date.now();
@@ -542,6 +545,7 @@ function renderTable(){
   const now = Date.now();
   const rows = Object.entries(live)
     .filter(([, d]) => now - d.last < 60000)                 // 최근 60초 내 감지된 것만
+    .filter(([, d]) => d.hist.length)                         // 유효한 신호가 하나도 없으면 제외
     .map(([k, d]) => ({ k, d, r: avg(d.hist) }))
     .filter(({ k, d, r }) => !$("fNear").checked || r >= NEAR_VIEW || d.nameSus || d.makerSus || k === selectedKey)
     .sort((a, b) => b.r - a.r);
@@ -584,7 +588,7 @@ function detailRow(k, d, r){
     ${item("송신 세기", d.tx != null ? d.tx + " dBm" : "-")}
     ${item("서비스 UUID", svcList.length ? svcList.map(esc).join("<br>") : "-")}
     ${item("제조사 데이터", mfrList.length ? mfrList.map(esc).join("<br>") : "-")}
-    ${item("수신 패킷", `${d.count}개 · 처음 ${new Date(d.first).toLocaleTimeString("ko-KR")}`)}
+    ${item("수신 패킷", `${d.count}개 · 처음 ${new Date(d.first).toLocaleTimeString("ko-KR")}${d.bad ? ` · 신호값 없는 패킷 ${d.bad}개 제외` : ""}`)}
     ${item("주소 수", d.ids.size + "개" + (d.ids.size > 1 ? " (주소를 바꿔 가며 신호를 보냄)" : ""))}
   </td></tr>`;
 }
