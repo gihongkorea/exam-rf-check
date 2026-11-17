@@ -11,6 +11,7 @@
 | 파일 | 실행 환경 | 감시 대상 |
 |---|---|---|
 | `index.html` | 브라우저 (Chrome) — GitHub Pages | 블루투스(BLE) |
+| `python/exam_server_termux.py` + `index.html` | 안드로이드 Termux + Chrome | **블루투스 + 와이파이 한 화면** |
 | `python/exam_rf_scan.py` | PC (Windows 권장) | 블루투스 + Wi-Fi 핫스팟 |
 | `python/exam_wifi_android.py` | 안드로이드 Termux | Wi-Fi 핫스팟 |
 
@@ -34,6 +35,24 @@
 - 감시 중에는 화면을 켠 채 페이지를 띄워 두세요 (화면이 꺼지면 스캔 중지)
 - 아이폰 Safari는 웹 블루투스 미지원 → 시연 모드만 가능
 - 브라우저는 보안상 Wi-Fi 스캔이 불가능 → 핫스팟은 파이썬 도구 사용
+
+## 블루투스 + 와이파이 통합 (안드로이드 Termux)
+
+브라우저는 보안상 와이파이를 스캔할 수 없어서, 폰 안의 Termux 서버가 와이파이 목록을 페이지에 전달합니다.
+
+1. F-Droid에서 `Termux`, `Termux:API` 설치 → Termux:API 위치 권한 허용, GPS 켜기
+2. Termux에서:
+   ```bash
+   pkg update && pkg install python git termux-api
+   git clone https://github.com/gihongkorea/exam-rf-check
+   python exam-rf-check/python/exam_server_termux.py
+   ```
+3. Chrome에서 `http://localhost:8000` 열기 → ⑤번 칸에 와이파이·핫스팟 목록 표시
+4. 업데이트: `cd exam-rf-check && git pull`
+
+- 서버는 이 폰 안(localhost)에서만 열립니다.
+- 블루투스 스캔이 안 되는 상태(Chrome 실험 기능 꺼짐)에서도 와이파이만으로 기준선·감시가 됩니다.
+- 와이파이 경고: 기준선에 없던 핫스팟 이름(iPhone, Galaxy 등), 가까운 신규 AP(임의 주소면 개인기기 추정), 신호 급증
 
 ## PC 버전
 

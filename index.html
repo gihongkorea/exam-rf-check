@@ -73,7 +73,7 @@
 <body>
 <header>
   <h1>시험장 무선 점검 · 웹 BLE</h1>
-  <p>주변 블루투스 신호를 수신만 합니다 (전파 송신·차단·내용 열람 없음) · <b>v1.4</b> (11/17 22:05)</p>
+  <p>주변 블루투스 신호를 수신만 합니다 (전파 송신·차단·내용 열람 없음) · <b>v1.5</b> (11/17 블루투스+와이파이)</p>
 </header>
 
 <main>
@@ -146,8 +146,31 @@
         <tbody id="tbody"><tr><td colspan="5" class="empty">스캔을 시작하면 표시됩니다.</td></tr></tbody>
       </table>
     </div>
-    <p class="note">※ 웹 브라우저는 보안상 <b>와이파이(핫스팟) 스캔이 불가능</b>합니다. 핫스팟 감시는 PC/안드로이드 파이썬 도구를 쓰세요.<br>
+    <p class="note">※ 와이파이(핫스팟)는 아래 ⑤에서 확인합니다.<br>
     ※ 경고는 육안 확인을 위한 참고 신호이며, 부정행위 판정 근거가 아닙니다.</p>
+  </section>
+
+  <!-- 5. 와이파이 -->
+  <section class="card" id="wifiCard">
+    <h2>⑤ 와이파이 · 핫스팟</h2>
+    <p class="note" id="wifiStatus" style="margin-top:0"></p>
+    <div class="tablewrap" id="wifiTableWrap" style="display:none">
+      <table>
+        <thead><tr><th>상태</th><th>신호</th><th>와이파이 이름</th><th>대역</th><th>주소(BSSID)</th></tr></thead>
+        <tbody id="wbody"></tbody>
+      </table>
+    </div>
+    <details id="wifiHelp">
+      <summary>와이파이도 같이 보려면 (안드로이드 Termux)</summary>
+      <ol>
+        <li>F-Droid에서 <b>Termux</b>, <b>Termux:API</b> 설치 → Termux:API 앱에 위치 권한 허용, GPS 켜기</li>
+        <li>Termux에서 <code>pkg install python git termux-api</code></li>
+        <li><code>git clone https://github.com/gihongkorea/exam-rf-check</code></li>
+        <li><code>python exam-rf-check/python/exam_server_termux.py</code></li>
+        <li>Chrome에서 <code>http://localhost:8000</code> 열기 (업데이트: <code>cd exam-rf-check && git pull</code>)</li>
+      </ol>
+      <p>웹 브라우저는 보안상 와이파이를 직접 스캔할 수 없어서, 폰 안의 Termux 서버가 목록을 대신 전달합니다.</p>
+    </details>
   </section>
 </main>
 
@@ -207,6 +230,11 @@ let baseCollect = {};                // 기준선 수집 중 임시 저장
 const live = {};                     // key -> {name, mfr, hist:[rssi], last}
 const alerts = [];                   // 경고 기록
 const lastAlert = {};                // key -> 마지막 경고 시각
+let wifiSrc = null;                  // 와이파이 출처: null(없음) | "server"(Termux) | "demo"
+const wifiLive = {};                 // bssid -> {ssid, freq, hist:[rssi], last}
+let wifiBaseCollect = {};            // 기준선 수집 중 와이파이
+let wifiTimer = null, wifiDemoTimer = null, wifiMsg = "";
+let bleOk = false;                   // 이번 점검에서 블루투스 스캔이 되는지
 
 /* =========================================================
    1) 환경 점검
@@ -384,26 +412,39 @@ function stopScan(){
   if (scanHandle) { try { scanHandle.stop(); } catch(e){} scanHandle = null;
     navigator.bluetooth.removeEventListener("advertisementreceived", onAdvertisement); }
 }
-function stopDemo(){ if (demoTimer) { clearInterval(demoTimer); demoTimer = null; } }
+function stopDemo(){
+  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+  if (wifiDemoTimer) { clearInterval(wifiDemoTimer); wifiDemoTimer = null; }
+  if (wifiSrc === "demo") { wifiSrc = null; Object.keys(wifiLive).forEach(k => delete wifiLive[k]); renderWifi(); }
+}
 
 async function doBaseline(){
   unlockAudio();
   Object.keys(live).forEach(k => delete live[k]);
-  baseCollect = {};
-  if (!(await startScan())) return;
+  baseCollect = {}; wifiBaseCollect = {};
+  // 블루투스 스캔이 안 돼도(실험 기능 꺼짐 등) Termux 와이파이가 있으면 와이파이만으로 진행
+  bleOk = await startScan();
+  if (!bleOk && !wifiSrc) return;
   mode = "baseline"; lockUI(true);
+  refreshWifiNow();                                    // 와이파이도 바로 한 번 읽음
   let left = cfg().baseSec;
   setStatus("base", `기준선 수집 중… ${left}초`);
   baseTimer = setInterval(() => {
     left--;
     if (left > 0) { setStatus("base", `기준선 수집 중… ${left}초`); return; }
     clearInterval(baseTimer); baseTimer = null;
-    baseline = { created: new Date().toLocaleString("ko-KR"), devices: baseCollect };
+    baseline = { created: new Date().toLocaleString("ko-KR"), devices: baseCollect,
+                 wifi: wifiSrc ? wifiBaseCollect : null };
     saveBaseline(baseline);
     mode = "idle"; stopScan(); lockUI(false);
     const susIn = Object.values(baseCollect).filter(b => b.suspect);
-    if (susIn.length) setStatus("alarm", `기준선에 의심기기 ${susIn.length}개 포함 (${susIn.map(b => b.maker).join(", ")}) — 주변 확인 필요`);
-    else setStatus("", `기준선 저장 완료 (${Object.keys(baseCollect).length}개 기기)`);
+    const hotIn = wifiSrc ? Object.values(wifiBaseCollect).filter(w => isHotspot(w.ssid)) : [];
+    const warn = [];
+    if (susIn.length) warn.push(`의심기기 ${susIn.length}개 (${susIn.map(b => b.maker).join(", ")})`);
+    if (hotIn.length) warn.push(`핫스팟 ${hotIn.length}개 (${hotIn.map(w => w.ssid).join(", ")})`);
+    if (warn.length) setStatus("alarm", `기준선에 ${warn.join(" · ")} 포함 — 주변 확인 필요`);
+    else setStatus("", `기준선 저장 완료 (블루투스 ${bleOk ? Object.keys(baseCollect).length + "개" : "스캔 불가"}` +
+      (wifiSrc ? ` · 와이파이 ${Object.keys(wifiBaseCollect).length}개)` : ")"));
     renderBaseInfo(); scheduleRender();
   }, 1000);
 }
@@ -411,9 +452,14 @@ async function doBaseline(){
 async function doMonitor(){
   unlockAudio();
   if (!baseline) { setStatus("alarm", "기준선이 없습니다. 먼저 '기준선 저장'을 하세요."); return; }
-  if (!(await startScan())) return;
+  bleOk = await startScan();
+  if (!bleOk && !wifiSrc) return;
   mode = "monitor"; lockUI(true);
-  setStatus("mon", "감시 중 — 화면을 켜 둔 채로 두세요");
+  setStatus("mon", wifiSrc && !baseline.wifi
+    ? "감시 중 — 와이파이 기준선이 없어 와이파이 경고는 꺼져 있음 (기준선 다시 저장 권장)"
+    : !bleOk ? "감시 중 (와이파이만) — 블루투스 스캔 불가, 환경 점검 ① 참고"
+    : "감시 중 — 화면을 켜 둔 채로 두세요");
+  refreshWifiNow();
   try { wakeLock = await navigator.wakeLock.request("screen"); } catch(e){}   // 화면 꺼짐 방지
 }
 
@@ -465,6 +511,9 @@ function startDemo(){
   stopScan(); stopDemo();
   demoStart = Date.now();
   demoTimer = setInterval(demoTick, 700);
+  if (wifiSrc !== "server") {                          // 실제 서버가 없으면 가짜 와이파이도 보여줌
+    wifiSrc = "demo"; demoWifiTick(); wifiDemoTimer = setInterval(demoWifiTick, 3000);
+  }
   setStatus("", "시연 모드 켜짐 — '기준선 저장' → '감시 시작' 순서로 눌러 보세요");
 }
 
@@ -495,9 +544,10 @@ function resetBaseline(){
 }
 
 function alertsCsv(){
-  const rows = [["시각","기기","제조사","신호(dBm)","사유","병합건수","식별키"]]
+  const rows = [["시각","종류","기기","제조사/대역","신호(dBm)","사유","병합건수","식별키"]]
     .concat(alerts.slice().reverse().map(a =>
-      [a.time.toLocaleTimeString("ko-KR"), a.name, a.maker || "-", a.rssi, a.reason, a.count || 1, a.key]));
+      [a.time.toLocaleTimeString("ko-KR"), a.kind === "WIFI" ? "와이파이" : "블루투스", a.name,
+       a.maker || "-", a.rssi, a.reason, a.count || 1, a.key]));
   return rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
 }
 function downloadCsv(){
@@ -524,14 +574,15 @@ function lockUI(on){
 function renderBaseInfo(){
   $("sBase").textContent = baseline ? Object.keys(baseline.devices).length : 0;
   $("baseInfo").textContent = baseline
-    ? `기준선: ${baseline.created} 저장 (${Object.keys(baseline.devices).length}개 기기)`
+    ? `기준선: ${baseline.created} 저장 (블루투스 ${Object.keys(baseline.devices).length}개` +
+      (baseline.wifi ? ` · 와이파이 ${Object.keys(baseline.wifi).length}개)` : ")")
     : "저장된 기준선 없음 — 휴대폰 수거 직후 '기준선 저장'을 누르세요.";
 }
 function renderAlerts(){
   $("sAlert").textContent = alerts.length;
   if (alerts.length && mode === "monitor") setStatus("alarm", `경고 ${alerts.length}건 — 최근: ${alerts[0].name}`);
   $("alerts").innerHTML = alerts.length ? alerts.map(a =>
-    `<div class="alert ${a.level === "mid" ? "mid" : ""}"><b>${a.reason}</b>${a.count > 1 ? ` <b>×${a.count}</b>` : ""} · ${esc(a.name)} · ${esc(a.maker || "-")} · ${a.rssi}dBm<br>
+    `<div class="alert ${a.level === "mid" ? "mid" : ""}"><span class="tag ${a.kind === "WIFI" ? "t-new" : "t-base"}">${a.kind === "WIFI" ? "와이파이" : "블루투스"}</span> <b>${a.reason}</b>${a.count > 1 ? ` <b>×${a.count}</b>` : ""} · ${esc(a.name)} · ${esc(a.maker || "-")} · ${a.rssi}dBm<br>
      ${a.count > 1 ? "<small>주소를 바꾸는 같은 기기일 가능성 (1분 내 비슷한 신호)</small><br>" : ""}
      <small>${a.time.toLocaleTimeString("ko-KR")}</small></div>`).join("")
     : '<div class="empty">아직 경고가 없습니다.</div>';
@@ -601,6 +652,111 @@ $("tbody").addEventListener("click", e => {
 });
 
 /* =========================================================
+   8) 와이파이 — Termux 서버(/api/wifi)가 있을 때만, 또는 시연 모드
+   ========================================================= */
+const HOTSPOT_KEYWORDS = ["iphone", "아이폰", "galaxy", "갤럭시", "androidap", "android", "sm-",
+                          "hotspot", "핫스팟", "pixel", "redmi"];
+const isHotspot = s => !!s && HOTSPOT_KEYWORDS.some(k => s.toLowerCase().includes(k));
+// 주소 첫 바이트의 두 번째 비트가 1이면 '임의(로컬) 주소'. 폰 핫스팟에서 흔함 (공유기는 보통 제조사 고유 주소)
+const isLocalMac = b => (parseInt(b.slice(0, 2), 16) & 2) !== 0;
+const band = f => !f ? "-" : f < 3000 ? "2.4GHz" : f < 5925 ? "5GHz" : "6GHz";
+
+// 페이지를 열 때 Termux 서버가 있는지 확인 (GitHub 주소에서는 404 → 와이파이 없음)
+async function wifiProbe(){
+  try {
+    const r = await fetch("api/wifi", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    if (!("aps" in j)) throw new Error("형식 다름");
+    wifiSrc = "server";
+    handleWifi(j);
+    wifiTimer = setInterval(wifiPoll, 10000);          // 10초마다 서버에서 새 목록 받기
+  } catch (e) { /* 서버 없음 */ }
+  renderWifi();
+}
+async function wifiPoll(){
+  try { const r = await fetch("api/wifi", { cache: "no-store" }); handleWifi(await r.json()); }
+  catch (e) { wifiMsg = "서버 응답 없음 — Termux에서 서버가 실행 중인지 확인하세요"; renderWifi(); }
+}
+function refreshWifiNow(){ if (wifiSrc === "server") wifiPoll(); else if (wifiSrc === "demo") demoWifiTick(); }
+
+function handleWifi(j){
+  if (!j.ok) { wifiMsg = j.error || "와이파이 목록을 읽지 못했습니다"; renderWifi(); return; }
+  wifiMsg = `${j.aps.length}개 AP · 갱신 ${j.time ? new Date(j.time * 1000).toLocaleTimeString("ko-KR") : "-"}` +
+            " (안드로이드가 주기적으로 스캔한 결과)";
+  const now = Date.now();
+  j.aps.forEach(ap => {
+    if (ap.rssi == null || ap.rssi >= 0 || ap.rssi <= -127) return;
+    const w = wifiLive[ap.bssid] || (wifiLive[ap.bssid] = { hist: [] });
+    w.ssid = ap.ssid; w.freq = ap.freq; w.last = now;
+    w.hist.push(ap.rssi); if (w.hist.length > 3) w.hist.shift();
+    const rssi = avg(w.hist);
+    if (mode === "baseline") {
+      const b = wifiBaseCollect[ap.bssid];
+      if (!b || rssi > b.max) wifiBaseCollect[ap.bssid] = { ssid: ap.ssid || "(숨김)", max: rssi };
+    } else if (mode === "monitor") evaluateWifi(ap.bssid, w, rssi);
+  });
+  renderWifi();
+}
+
+// 블루투스와 같은 원리: 기준선에 없던 핫스팟·가까운 와이파이, 또는 신호 급증
+function evaluateWifi(bssid, w, rssi){
+  if (!baseline || !baseline.wifi) return;
+  const c = cfg(), nearW = c.near - 5;                // 와이파이는 출력이 커서 근거리 기준을 5dB 낮춤
+  const known = baseline.wifi[bssid];
+  let reason = null, level = "high";
+  if (!known) {
+    if (isHotspot(w.ssid)) reason = "★신규 핫스팟 의심";
+    else if (rssi >= nearW) { reason = "신규 근거리 와이파이" + (isLocalMac(bssid) ? " (임의 주소: 개인기기 추정)" : ""); level = "mid"; }
+  } else if (rssi - known.max >= c.jump && rssi >= nearW) {
+    reason = `와이파이 신호 급증 (기준 ${known.max}dBm)`; level = "mid";
+  }
+  if (!reason) return;
+  const key = "W|" + bssid, now = Date.now();
+  if (now - (lastAlert[key] || 0) < c.cool) return;
+  lastAlert[key] = now;
+  alerts.unshift({ kind: "WIFI", time: new Date(), name: w.ssid || "(숨김 와이파이)", maker: band(w.freq),
+                   rssi, reason, key, level, count: 1 });
+  ring(level); renderAlerts();
+}
+
+function renderWifi(){
+  if (!wifiSrc) {
+    $("wifiStatus").innerHTML = "이 주소에서는 와이파이를 볼 수 없습니다. <b>Termux 서버로 열면</b> 여기에 핫스팟 목록이 함께 표시됩니다.";
+    $("wifiTableWrap").style.display = "none";
+    return;
+  }
+  $("wifiHelp").style.display = wifiSrc === "server" ? "none" : "";
+  $("wifiStatus").textContent = (wifiSrc === "demo" ? "[시연] " : "") + wifiMsg;
+  $("wifiTableWrap").style.display = "";
+  const now = Date.now();
+  const rows = Object.entries(wifiLive).filter(([, w]) => now - w.last < 90000)
+    .map(([b, w]) => ({ b, w, r: avg(w.hist) })).sort((x, y) => y.r - x.r).slice(0, 20);
+  $("wbody").innerHTML = rows.length ? rows.map(({ b, w, r }) => {
+    const hot = isHotspot(w.ssid), inBase = baseline && baseline.wifi && baseline.wifi[b];
+    const tag = hot ? '<span class="tag t-sus">핫스팟</span>'
+      : inBase ? '<span class="tag t-base">기준선</span>' : '<span class="tag t-new">신규</span>';
+    const wbar = Math.max(4, Math.min(48, r + 100));
+    return `<tr><td>${tag}</td><td><span class="bar" style="width:${wbar}px"></span><span class="rssi">${r}</span></td>
+      <td>${esc(w.ssid || "(숨김)")}${isLocalMac(b) ? ' <span class="tag t-new">임의주소</span>' : ""}</td>
+      <td>${band(w.freq)}</td><td><small>${b}</small></td></tr>`;
+  }).join("") : '<tr><td colspan="5" class="empty">표시할 와이파이 없음</td></tr>';
+}
+
+// 시연 모드용 가짜 와이파이 (감시 12초 뒤 학생 핫스팟 등장)
+const DEMO_WIFI = [
+  { bssid: "00:1a:2b:3c:4d:01", ssid: "GJE-School", rssi: -58, freq: 5180, from: 0 },
+  { bssid: "88:3c:1c:aa:10:22", ssid: "KT_GiGA_2G_Wave2", rssi: -81, freq: 2437, from: 0 },
+  { bssid: "6a:2f:91:5e:7b:03", ssid: "iPhone (학생)", rssi: -52, freq: 2462, from: 12 },
+];
+function demoWifiTick(){
+  const t = (Date.now() - demoStart) / 1000;
+  const aps = DEMO_WIFI.filter(a => mode === "monitor" ? t >= a.from : a.from === 0)
+    .map(a => ({ ...a, rssi: a.rssi + Math.round(Math.random() * 4 - 2) }));
+  handleWifi({ ok: true, time: Date.now() / 1000, aps });
+}
+
+/* =========================================================
    연결
    ========================================================= */
 $("btnBase").onclick = doBaseline;
@@ -612,7 +768,7 @@ $("btnReset").onclick = resetBaseline;
 $("btnCsv").onclick = downloadCsv;
 $("btnCopy").onclick = copyCsv;
 $("fNear").onchange = renderTable;
-renderChecks(); renderBaseInfo();
+renderChecks(); renderBaseInfo(); wifiProbe();
 </script>
 </body>
 </html>
