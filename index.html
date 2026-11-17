@@ -61,6 +61,7 @@
   .t-sus{background:var(--redbg);color:var(--red)}
   .bar{display:inline-block;height:6px;border-radius:3px;background:var(--blue);vertical-align:middle;margin-right:6px}
   .note{font-size:13px;color:var(--sub)}
+  .rssi{display:inline-block;min-width:3ch;font-variant-numeric:tabular-nums}
   tr.dev{cursor:pointer} tr.dev.open td{background:var(--bluebg)}
   tr.detail td{white-space:normal;background:#fafbfc;padding:10px 12px}
   .kv{display:grid;grid-template-columns:88px 1fr;gap:8px;padding:3px 0;font-size:13px;border-bottom:1px dashed var(--line)}
@@ -280,7 +281,7 @@ function collectDetail(d, ev, mfrNums){
   if (ev.device && ev.device.id) d.ids.add(ev.device.id);
   (ev.uuids || []).forEach(u => d.uuids.add(shortUuid(u)));
   if (ev.serviceData) [...ev.serviceData.keys()].forEach(u => d.uuids.add(shortUuid(u)));
-  if (ev.txPower != null) d.tx = ev.txPower;
+  if (ev.txPower != null && ev.txPower > -127 && ev.txPower < 127) d.tx = ev.txPower;   // ±127·-128 = "정보 없음" 표시값
   if (ev.appearance != null) d.appearance = ev.appearance;
   mfrNums.forEach(n => { d.mfrRaw[n] = toHex(ev.manufacturerData.get(n)); });
 
@@ -307,8 +308,11 @@ function guessType(d){
   d.uuids.forEach(u => {
     if (GLASSES_SVC.has(u)) hints.push(`★스마트안경 회사 서비스 (${SVC_MAKERS[u]})`);
     else if (STD_SVC[u]) hints.push(STD_SVC[u]);
+    else if (SVC_MAKERS[u]) hints.push(`${SVC_MAKERS[u]} 등록 서비스 사용 (${SVC_MAKERS[u]} 기기·앱 추정)`);
   });
   if (d.appearance != null && APPEARANCE[d.appearance >> 6]) hints.push("외형: " + APPEARANCE[d.appearance >> 6]);
+  // 세부 정보가 없으면 제조사만이라도 알려줌
+  if (!hints.length && d.maker !== "-") hints.push(`${d.maker} 기기 (세부 종류 정보 없음)`);
   return [...new Set(hints)];
 }
 // 신호세기로 대략적인 거리 추정 (1m에서 -59dBm 가정, 실내 감쇠계수 2.5) — 매우 대략적
@@ -552,10 +556,10 @@ function renderTable(){
     const inBase = baseline && baseline.devices[k];
     const tag = sus ? '<span class="tag t-sus">의심</span>'
       : inBase ? '<span class="tag t-base">기준선</span>' : '<span class="tag t-new">신규</span>';
-    const w = Math.max(4, Math.min(60, (r + 100) * 1.2));
+    const w = Math.max(4, Math.min(48, (r + 100)));
     const open = k === selectedKey;
     return `<tr class="dev${open ? " open" : ""}" data-key="${esc(k)}"><td>${tag}</td>
-      <td><span class="bar" style="width:${w}px"></span>${r}</td>
+      <td><span class="bar" style="width:${w}px"></span><span class="rssi">${r}</span></td>
       <td>${open ? "▾" : "▸"} ${esc(d.name || "(이름 없음)")}</td><td>${esc(d.maker)}</td>
       <td>${Math.round((now - d.last) / 1000)}초 전</td></tr>` + (open ? detailRow(k, d, r) : "");
   }).join("");
