@@ -46,13 +46,20 @@ def scan_wifi():
     if not shutil.which("termux-wifi-scaninfo"):
         return False, "termux-api 미설치 (pkg install termux-api)", []
     try:
-        raw = subprocess.run(["termux-wifi-scaninfo"], capture_output=True,
-                             text=True, timeout=20).stdout
-        data = json.loads(raw)
+        res = subprocess.run(["termux-wifi-scaninfo"], capture_output=True,
+                             text=True, timeout=20)
+        raw = res.stdout.strip()
     except subprocess.TimeoutExpired:
-        return False, "응답 없음 — Termux:API 앱 설치·권한 확인", []
+        return False, "응답 없음 — Termux:API 앱이 설치돼 있지 않거나 응답하지 않음", []
+    if not raw:
+        # 출력이 비어 있으면 대부분 Termux:API '앱'이 없거나, Termux와 받은 곳이 다른 경우
+        err = res.stderr.strip()[:150]
+        return False, ("출력 없음 — Termux:API 앱 설치 여부, Termux와 같은 곳(F-Droid)에서 받았는지 확인"
+                       + (f" / 오류: {err}" if err else "")), []
+    try:
+        data = json.loads(raw)
     except json.JSONDecodeError:
-        return False, "결과 해석 실패 — Termux:API 앱 설치 확인", []
+        return False, "결과 해석 실패 — 받은 내용: " + raw[:150], []
     if isinstance(data, dict):          # 오류는 {"API_ERROR": "..."} 같은 dict로 옴
         return False, "오류: " + json.dumps(data, ensure_ascii=False) + " (위치 권한·GPS 확인)", []
     aps = [{
