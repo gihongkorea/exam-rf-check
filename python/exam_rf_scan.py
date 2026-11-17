@@ -33,6 +33,8 @@ LOG_FILE = Path(f"scan_log_{datetime.now():%Y%m%d}.csv")
 
 GLASSES_KEYWORDS = ["ray-ban", "rayban", "meta", "oakley", "glass",
                     "xreal", "rokid", "even g", "inmo", "solos"]
+# Bluetooth SIG 공식 제조사 번호 중 스마트안경 제조사 (Meta, Snap, Vuzix, Luxottica)
+GLASSES_MAKERS = {0x01AB, 0x058E, 0x03C2, 0x060C, 0x0D53}
 HOTSPOT_KEYWORDS = ["iphone", "galaxy", "androidap", "sm-", "hotspot",
                     "핫스팟", "pixel", "redmi"]
 
@@ -64,7 +66,8 @@ async def scan_ble(seconds=BLE_SCAN_SEC):
             "key": ble_key(name, addr, maker_ids),
             "label": name or f"(이름 없음) {addr}",
             "rssi": adv.rssi,
-            "suspect": any(k in name.lower() for k in GLASSES_KEYWORDS),
+            "suspect": any(k in name.lower() for k in GLASSES_KEYWORDS)
+                       or any(k in GLASSES_MAKERS for k in adv.manufacturer_data),
         })
     return rows
 
@@ -140,7 +143,10 @@ def compare(rows, base):
     alerts = []
     for r in rows:
         known = base.get(r["key"])
-        if known is None:
+        if r["suspect"] and r["kind"] == "BLE":
+            # 안경 의심기기는 기준선에 있어도 경고 (기준선 찍을 때 이미 쓰고 있었을 수 있음)
+            alerts.append((r, "★의심기기(안경 이름/제조사)"))
+        elif known is None:
             if r["suspect"]:
                 alerts.append((r, "★신규 의심기기(안경/핫스팟 이름)"))
             elif is_near(r):

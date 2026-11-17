@@ -132,9 +132,10 @@
   <!-- 4. 실시간 목록 -->
   <section class="card">
     <h2>④ 감지된 기기 (가까운 순)</h2>
+    <label style="font-size:14px;color:var(--ink);margin-bottom:6px"><input type="checkbox" id="fNear" checked> 가까운 기기만 보기 (-70dBm 이상)</label>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>상태</th><th>신호(평균)</th><th>기기 이름</th><th>제조사ID</th><th>마지막</th></tr></thead>
+        <thead><tr><th>상태</th><th>신호(평균)</th><th>기기 이름</th><th>제조사</th><th>마지막</th></tr></thead>
         <tbody id="tbody"><tr><td colspan="5" class="empty">스캔을 시작하면 표시됩니다.</td></tr></tbody>
       </table>
     </div>
@@ -148,6 +149,19 @@
    설정 & 상태
    ========================================================= */
 const GLASSES_KEYWORDS = ["ray-ban","rayban","meta","oakley","glass","xreal","rokid","even g","inmo","solos"];
+// 블루투스 표준기관(Bluetooth SIG) 공식 제조사 번호 → 이름
+const MAKERS = {
+  0x4c: "Apple", 0x75: "Samsung", 0xe0: "Google", 0x6: "Microsoft", 0xc4: "LG",
+  0x12d: "Sony", 0x38f: "Xiaomi", 0x27d: "Huawei", 0x171: "Amazon", 0x9e: "Bose",
+  0x87: "Garmin", 0x18e: "Fitbit", 0x157: "Huami", 0xbc6: "TCL",
+  0x1ab: "Meta", 0x58e: "Meta", 0x3c2: "Snap", 0x60c: "Vuzix", 0xd53: "Luxottica(레이밴)",
+};
+// 스마트안경을 만드는 회사: 이름이 없어도 이 번호가 보이면 의심
+const GLASSES_MAKERS = new Set([0x1ab, 0x58e, 0x3c2, 0x60c, 0xd53]);
+const makerLabel = nums => nums.length
+  ? nums.map(n => MAKERS[n] || "0x" + n.toString(16)).join(", ") : "-";
+const NEAR_VIEW = -70;               // '가까운 기기만' 보기 기준
+const MERGE_SEC = 60;                // 이름 없는 근거리 경고 병합 시간
 const STORE_KEY = "examBleBaseline";
 const $ = id => document.getElementById(id);
 const cfg = () => ({
@@ -196,11 +210,17 @@ const avg = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
 function onAdvertisement(ev){
   if (ev.rssi == null) return;
   const name = ev.name || (ev.device && ev.device.name) || "";
-  const mfrIds = ev.manufacturerData ? [...ev.manufacturerData.keys()].map(k => "0x" + k.toString(16)) : [];
+  const mfrNums = ev.manufacturerData ? [...ev.manufacturerData.keys()] : [];
+  const mfrIds = mfrNums.map(k => "0x" + k.toString(16));
   const key = makeKey(name, mfrIds, ev.device ? ev.device.id : "?");
 
   // RSSI는 흔들림이 커서 최근 5개 평균을 사용 (순간 튐 방지)
-  const d = live[key] || (live[key] = { name, mfr: mfrIds, hist: [], last: 0 });
+  const d = live[key] || (live[key] = {
+    name, mfr: mfrIds, maker: makerLabel(mfrNums), hist: [], last: 0,
+    // 의심 판정: 이름에 안경 키워드가 있거나, 스마트안경 제조사 번호를 쓰는 경우
+    nameSus: GLASSES_KEYWORDS.some(k => name.toLowerCase().includes(k)),
+    makerSus: mfrNums.some(n => GLASSES_MAKERS.has(n)),
+  });
   d.hist.push(ev.rssi);
   if (d.hist.length > 5) d.hist.shift();
   d.last = Date.now();
@@ -208,7 +228,8 @@ function onAdvertisement(ev){
 
   if (mode === "baseline") {
     const b = baseCollect[key];
-    if (!b || rssi > b.max) baseCollect[key] = { name: name || "(이름 없음)", max: rssi };
+    if (!b || rssi > b.max) baseCollect[key] = { name: name || "(이름 없음)", max: rssi,
+                                                 suspect: d.nameSus || d.makerSus, maker: d.maker };
   } else if (mode === "monitor") {
     evaluate(key, d, rssi);
   }
@@ -218,13 +239,14 @@ function onAdvertisement(ev){
 // 기준선과 비교해 경고 여부 판단
 function evaluate(key, d, rssi){
   const c = cfg();
-  const suspect = GLASSES_KEYWORDS.some(k => d.name.toLowerCase().includes(k));
   const known = baseline && baseline.devices[key];
   let reason = null, level = "high";
 
-  if (!known) {
-    if (suspect) reason = "★신규 의심기기 (안경 계열 이름)";
-    else if (rssi >= c.near && d.hist.length >= 3) { reason = "신규 근거리 신호"; level = "mid"; }
+  // 의심기기는 기준선에 있어도 경고 (기준선 찍을 때 이미 안경을 쓰고 있었을 수 있음)
+  if (d.makerSus) reason = `★스마트안경 제조사 신호 (${d.maker})`;
+  else if (d.nameSus) reason = "★의심기기 (안경 계열 이름)";
+  else if (!known) {
+    if (rssi >= c.near && d.hist.length >= 3) { reason = "신규 근거리 신호"; level = "mid"; }
   } else if (rssi - known.max >= c.jump && rssi >= c.near && d.hist.length >= 3) {
     reason = `신호 급증 (기준 ${known.max}dBm)`; level = "mid";
   }
@@ -233,7 +255,22 @@ function evaluate(key, d, rssi){
   const now = Date.now();
   if (now - (lastAlert[key] || 0) < c.cool) return;   // 같은 기기 반복 경고 방지
   lastAlert[key] = now;
-  const a = { time: new Date(), name: d.name || "(이름 없음)", rssi, reason, key, level };
+
+  // 이름 없는 기기는 주소를 자주 바꿔서, 한 기기가 '새 기기'로 여러 번 잡힘.
+  // 1분 안에 같은 제조사·비슷한 신호(±10dB)로 또 잡히면 새 경고 대신 기존 경고에 합침
+  const mergeable = reason === "신규 근거리 신호" && !d.name;
+  if (mergeable) {
+    const prev = alerts.find(a => a.merge && a.maker === d.maker &&
+      now - a.time.getTime() < MERGE_SEC * 1000 && Math.abs(a.rssi - rssi) <= 10);
+    if (prev) {
+      prev.count++; prev.rssi = rssi; prev.time = new Date();
+      alerts.splice(alerts.indexOf(prev), 1); alerts.unshift(prev);   // 맨 위로
+      renderAlerts();
+      return;                                           // 소리는 다시 안 울림
+    }
+  }
+  const a = { time: new Date(), name: d.name || "(이름 없음)", maker: d.maker, rssi, reason, key, level,
+              merge: mergeable, count: 1 };
   alerts.unshift(a);
   ring(level);
   renderAlerts();
@@ -279,7 +316,9 @@ async function doBaseline(){
     baseline = { created: new Date().toLocaleString("ko-KR"), devices: baseCollect };
     saveBaseline(baseline);
     mode = "idle"; stopScan(); lockUI(false);
-    setStatus("", `기준선 저장 완료 (${Object.keys(baseCollect).length}개 기기)`);
+    const susIn = Object.values(baseCollect).filter(b => b.suspect);
+    if (susIn.length) setStatus("alarm", `기준선에 의심기기 ${susIn.length}개 포함 (${susIn.map(b => b.maker).join(", ")}) — 주변 확인 필요`);
+    else setStatus("", `기준선 저장 완료 (${Object.keys(baseCollect).length}개 기기)`);
     renderBaseInfo(); scheduleRender();
   }, 1000);
 }
@@ -318,7 +357,7 @@ const DEMO = [
   { id: "d1", name: "감독관 Galaxy", mfr: 0x75, rssi: -70, from: 0 },
   { id: "d2", name: "", mfr: 0x4c, rssi: -82, from: 0 },
   { id: "d3", name: "교실 프로젝터", mfr: 0x6, rssi: -78, from: 0 },
-  { id: "d4", name: "Ray-Ban Meta", mfr: 0x1ab, rssi: -74, from: 10 },   // 10초 뒤 등장
+  { id: "d4", name: "", mfr: 0x1ab, rssi: -74, from: 10 },   // 10초 뒤 등장 (이름 없는 Meta 안경)
   { id: "d5", name: "", mfr: 0x4c, rssi: -52, from: 18 },                // 18초 뒤 근거리 등장
 ];
 function demoTick(){
@@ -369,9 +408,9 @@ function resetBaseline(){
 }
 
 function alertsCsv(){
-  const rows = [["시각","기기","신호(dBm)","사유","식별키"]]
+  const rows = [["시각","기기","제조사","신호(dBm)","사유","병합건수","식별키"]]
     .concat(alerts.slice().reverse().map(a =>
-      [a.time.toLocaleTimeString("ko-KR"), a.name, a.rssi, a.reason, a.key]));
+      [a.time.toLocaleTimeString("ko-KR"), a.name, a.maker || "-", a.rssi, a.reason, a.count || 1, a.key]));
   return rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
 }
 function downloadCsv(){
@@ -405,7 +444,8 @@ function renderAlerts(){
   $("sAlert").textContent = alerts.length;
   if (alerts.length && mode === "monitor") setStatus("alarm", `경고 ${alerts.length}건 — 최근: ${alerts[0].name}`);
   $("alerts").innerHTML = alerts.length ? alerts.map(a =>
-    `<div class="alert ${a.level === "mid" ? "mid" : ""}"><b>${a.reason}</b> · ${esc(a.name)} · ${a.rssi}dBm<br>
+    `<div class="alert ${a.level === "mid" ? "mid" : ""}"><b>${a.reason}</b>${a.count > 1 ? ` <b>×${a.count}</b>` : ""} · ${esc(a.name)} · ${esc(a.maker || "-")} · ${a.rssi}dBm<br>
+     ${a.count > 1 ? "<small>주소를 바꾸는 같은 기기일 가능성 (1분 내 비슷한 신호)</small><br>" : ""}
      <small>${a.time.toLocaleTimeString("ko-KR")}</small></div>`).join("")
     : '<div class="empty">아직 경고가 없습니다.</div>';
 }
@@ -419,17 +459,22 @@ function renderTable(){
   const rows = Object.entries(live)
     .filter(([, d]) => now - d.last < 60000)                 // 최근 60초 내 감지된 것만
     .map(([k, d]) => ({ k, d, r: avg(d.hist) }))
+    .filter(({ d, r }) => !$("fNear").checked || r >= NEAR_VIEW || d.nameSus || d.makerSus)
     .sort((a, b) => b.r - a.r);
   $("sLive").textContent = rows.length;
-  if (!rows.length) return;
+  if (!rows.length) {
+    if (Object.keys(live).length) $("tbody").innerHTML =
+      '<tr><td colspan="5" class="empty">가까운 기기 없음 (체크를 풀면 전체 표시)</td></tr>';
+    return;
+  }
   $("tbody").innerHTML = rows.map(({ k, d, r }) => {
-    const sus = GLASSES_KEYWORDS.some(w => d.name.toLowerCase().includes(w));
+    const sus = d.nameSus || d.makerSus;
     const inBase = baseline && baseline.devices[k];
     const tag = sus ? '<span class="tag t-sus">의심</span>'
       : inBase ? '<span class="tag t-base">기준선</span>' : '<span class="tag t-new">신규</span>';
     const w = Math.max(4, Math.min(60, (r + 100) * 1.2));
     return `<tr><td>${tag}</td><td><span class="bar" style="width:${w}px"></span>${r}</td>
-      <td>${esc(d.name || "(이름 없음)")}</td><td>${d.mfr.join(",") || "-"}</td>
+      <td>${esc(d.name || "(이름 없음)")}</td><td>${esc(d.maker)}</td>
       <td>${Math.round((now - d.last) / 1000)}초 전</td></tr>`;
   }).join("");
 }
@@ -446,6 +491,7 @@ $("btnDemo").onclick = startDemo;
 $("btnReset").onclick = resetBaseline;
 $("btnCsv").onclick = downloadCsv;
 $("btnCopy").onclick = copyCsv;
+$("fNear").onchange = renderTable;
 renderChecks(); renderBaseInfo();
 </script>
 </body>
