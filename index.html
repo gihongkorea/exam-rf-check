@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>시험장 무선 점검 (웹 BLE)</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --ink:#1b1f24; --sub:#5d6670; --line:#e3e6ea;
+    --blue:#2457d6; --green:#1f8a4c; --amber:#b86e00; --red:#c62828;
+    --greenbg:#e6f4ec; --amberbg:#fff3df; --redbg:#fdeaea; --bluebg:#e8eefc;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif;
+    font-size:15px;line-height:1.5}
+  header{background:var(--ink);color:#fff;padding:14px 16px}
+  header h1{margin:0;font-size:18px}
+  header p{margin:2px 0 0;font-size:12px;opacity:.75}
+  main{max-width:860px;margin:0 auto;padding:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+  .card h2{margin:0 0 10px;font-size:15px}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{font:inherit;border:0;border-radius:10px;padding:12px 14px;cursor:pointer;
+    background:var(--bluebg);color:var(--blue);font-weight:600;flex:1 1 140px}
+  button.primary{background:var(--blue);color:#fff}
+  button.danger{background:var(--redbg);color:var(--red)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .status{display:flex;align-items:center;gap:10px;padding:12px;border-radius:10px;
+    background:var(--bluebg);font-weight:700;margin-bottom:10px}
+  .status.base{background:var(--amberbg);color:var(--amber)}
+  .status.mon{background:var(--greenbg);color:var(--green)}
+  .status.alarm{background:var(--redbg);color:var(--red)}
+  .dot{width:10px;height:10px;border-radius:50%;background:currentColor}
+  .status.mon .dot,.status.base .dot{animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.25}}
+  .checks{list-style:none;margin:0;padding:0;font-size:14px}
+  .checks li{padding:4px 0}
+  .ok{color:var(--green)} .no{color:var(--red)} .warn{color:var(--amber)}
+  details{font-size:13px;color:var(--sub);margin-top:8px}
+  details summary{cursor:pointer;font-weight:600;color:var(--ink)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+  label{font-size:12px;color:var(--sub);display:block}
+  input[type=number]{width:100%;font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+  .stat{background:var(--bg);border-radius:10px;padding:8px;text-align:center}
+  .stat b{display:block;font-size:20px}
+  .stat span{font-size:12px;color:var(--sub)}
+  .alerts{max-height:260px;overflow:auto}
+  .alert{border-left:4px solid var(--red);background:var(--redbg);padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:14px}
+  .alert.mid{border-color:var(--amber);background:var(--amberbg)}
+  .alert small{color:var(--sub)}
+  .empty{color:var(--sub);font-size:14px;text-align:center;padding:10px}
+  .tablewrap{overflow:auto;max-height:420px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+  th{position:sticky;top:0;background:var(--card);color:var(--sub);font-weight:600}
+  .tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:12px;font-weight:600}
+  .t-base{background:var(--bg);color:var(--sub)}
+  .t-new{background:var(--amberbg);color:var(--amber)}
+  .t-sus{background:var(--redbg);color:var(--red)}
+  .bar{display:inline-block;height:6px;border-radius:3px;background:var(--blue);vertical-align:middle;margin-right:6px}
+  .note{font-size:13px;color:var(--sub)}
+  textarea{width:100%;height:90px;font:12px monospace;margin-top:8px;display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>시험장 무선 점검 · 웹 BLE</h1>
+  <p>주변 블루투스 신호를 수신만 합니다 (전파 송신·차단·내용 열람 없음)</p>
+</header>
+
+<main>
+  <!-- 1. 환경 점검 -->
+  <section class="card">
+    <h2>① 이 브라우저에서 되는지 확인</h2>
+    <ul class="checks" id="checks"></ul>
+    <details>
+      <summary>스캔이 '불가'로 나오면 (Chrome 실험 기능 켜기)</summary>
+      <ol>
+        <li>주소창에 <code>chrome://flags/#enable-experimental-web-platform-features</code> 입력</li>
+        <li><b>Experimental Web Platform features</b> → <b>Enabled</b> → 브라우저 재시작</li>
+        <li>안드로이드: 블루투스 ON, 위치(GPS) ON, Chrome에 '근처 기기'·위치 권한 허용</li>
+        <li>페이지는 <code>https://</code> 또는 <code>http://localhost</code>로 열어야 합니다 (파일 직접 열기 X)</li>
+        <li>아이폰 Safari는 웹 블루투스를 지원하지 않습니다 → 시연 모드만 가능</li>
+      </ol>
+    </details>
+  </section>
+
+  <!-- 2. 조작 -->
+  <section class="card">
+    <h2>② 점검</h2>
+    <div class="status" id="status"><span class="dot"></span><span id="statusText">대기 중</span></div>
+    <div class="stats">
+      <div class="stat"><b id="sBase">0</b><span>기준선 기기</span></div>
+      <div class="stat"><b id="sLive">0</b><span>현재 감지</span></div>
+      <div class="stat"><b id="sAlert">0</b><span>경고</span></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="btnBase">기준선 저장</button>
+      <button class="primary" id="btnMon">감시 시작</button>
+      <button class="danger" id="btnStop" disabled>중지</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnChooser">주변 기기 목록 보기</button>
+      <button id="btnDemo">시연 모드</button>
+      <button id="btnReset">기준선 초기화</button>
+    </div>
+    <p class="note" id="baseInfo">저장된 기준선 없음 — 휴대폰 수거 직후 '기준선 저장'을 누르세요.</p>
+    <details>
+      <summary>설정</summary>
+      <div class="grid" style="margin-top:8px">
+        <div><label>근거리 기준 (dBm)</label><input type="number" id="cNear" value="-60"></div>
+        <div><label>신호 급증 기준 (dB)</label><input type="number" id="cJump" value="15"></div>
+        <div><label>기준선 수집 시간 (초)</label><input type="number" id="cBaseSec" value="30"></div>
+        <div><label>같은 기기 재경고 간격 (초)</label><input type="number" id="cCool" value="300"></div>
+      </div>
+    </details>
+  </section>
+
+  <!-- 3. 경고 -->
+  <section class="card">
+    <h2>③ 경고</h2>
+    <div class="alerts" id="alerts"><div class="empty">아직 경고가 없습니다.</div></div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnCsv">경고 기록 CSV 저장</button>
+      <button id="btnCopy">경고 기록 복사</button>
+    </div>
+    <textarea id="copyBox" readonly></textarea>
+  </section>
+
+  <!-- 4. 실시간 목록 -->
+  <section class="card">
+    <h2>④ 감지된 기기 (가까운 순)</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>상태</th><th>신호(평균)</th><th>기기 이름</th><th>제조사ID</th><th>마지막</th></tr></thead>
+        <tbody id="tbody"><tr><td colspan="5" class="empty">스캔을 시작하면 표시됩니다.</td></tr></tbody>
+      </table>
+    </div>
+    <p class="note">※ 웹 브라우저는 보안상 <b>와이파이(핫스팟) 스캔이 불가능</b>합니다. 핫스팟 감시는 PC/안드로이드 파이썬 도구를 쓰세요.<br>
+    ※ 경고는 육안 확인을 위한 참고 신호이며, 부정행위 판정 근거가 아닙니다.</p>
+  </section>
+</main>
+
+<script>
+/* =========================================================
+   설정 & 상태
+   ========================================================= */
+const GLASSES_KEYWORDS = ["ray-ban","rayban","meta","oakley","glass","xreal","rokid","even g","inmo","solos"];
+const STORE_KEY = "examBleBaseline";
+const $ = id => document.getElementById(id);
+const cfg = () => ({
+  near: +$("cNear").value, jump: +$("cJump").value,
+  baseSec: +$("cBaseSec").value, cool: +$("cCool").value * 1000,
+});
+
+let mode = "idle";            // idle | baseline | monitor
+let scanHandle = null;        // requestLEScan 결과 (stop()용)
+let demoTimer = null, demoStart = 0;
+let baseTimer = null;
+let wakeLock = null, audioCtx = null;
+let baseline = loadBaseline();       // {created, devices:{key:{name,max}}}
+let baseCollect = {};                // 기준선 수집 중 임시 저장
+const live = {};                     // key -> {name, mfr, hist:[rssi], last}
+const alerts = [];                   // 경고 기록
+const lastAlert = {};                // key -> 마지막 경고 시각
+
+/* =========================================================
+   1) 환경 점검
+   ========================================================= */
+const support = {
+  secure: window.isSecureContext,
+  bt: !!navigator.bluetooth,
+  scan: !!(navigator.bluetooth && navigator.bluetooth.requestLEScan),
+};
+function renderChecks(){
+  const li = (ok, okText, noText, warn) =>
+    `<li class="${ok ? "ok" : (warn ? "warn" : "no")}">${ok ? "✔" : (warn ? "△" : "✖")} ${ok ? okText : noText}</li>`;
+  $("checks").innerHTML =
+    li(support.secure, "보안 연결(https/localhost)로 열림", "보안 연결 아님 → https 또는 localhost로 여세요") +
+    li(support.bt, "웹 블루투스 지원", "웹 블루투스 미지원 브라우저 (아이폰 Safari 등) → 시연 모드만 가능") +
+    li(support.scan, "연속 스캔(requestLEScan) 사용 가능", "연속 스캔 불가 → 아래 '실험 기능 켜기' 참고 ('주변 기기 목록 보기'는 가능)", support.bt);
+}
+
+/* =========================================================
+   2) 기기 식별 & 광고 패킷 처리 (핵심)
+   ========================================================= */
+// 폰은 BLE 주소를 수시로 바꾸므로, 이름이 있으면 '이름+제조사ID'로 식별
+function makeKey(name, mfrIds, id){
+  return name ? `N|${name}|${mfrIds.slice().sort().join(",")}` : `I|${id}`;
+}
+const avg = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+
+// 광고 패킷 1개가 들어올 때마다 호출됨 (실제 스캔과 시연 모드 공용)
+function onAdvertisement(ev){
+  if (ev.rssi == null) return;
+  const name = ev.name || (ev.device && ev.device.name) || "";
+  const mfrIds = ev.manufacturerData ? [...ev.manufacturerData.keys()].map(k => "0x" + k.toString(16)) : [];
+  const key = makeKey(name, mfrIds, ev.device ? ev.device.id : "?");
+
+  // RSSI는 흔들림이 커서 최근 5개 평균을 사용 (순간 튐 방지)
+  const d = live[key] || (live[key] = { name, mfr: mfrIds, hist: [], last: 0 });
+  d.hist.push(ev.rssi);
+  if (d.hist.length > 5) d.hist.shift();
+  d.last = Date.now();
+  const rssi = avg(d.hist);
+
+  if (mode === "baseline") {
+    const b = baseCollect[key];
+    if (!b || rssi > b.max) baseCollect[key] = { name: name || "(이름 없음)", max: rssi };
+  } else if (mode === "monitor") {
+    evaluate(key, d, rssi);
+  }
+  scheduleRender();
+}
+
+// 기준선과 비교해 경고 여부 판단
+function evaluate(key, d, rssi){
+  const c = cfg();
+  const suspect = GLASSES_KEYWORDS.some(k => d.name.toLowerCase().includes(k));
+  const known = baseline && baseline.devices[key];
+  let reason = null, level = "high";
+
+  if (!known) {
+    if (suspect) reason = "★신규 의심기기 (안경 계열 이름)";
+    else if (rssi >= c.near && d.hist.length >= 3) { reason = "신규 근거리 신호"; level = "mid"; }
+  } else if (rssi - known.max >= c.jump && rssi >= c.near && d.hist.length >= 3) {
+    reason = `신호 급증 (기준 ${known.max}dBm)`; level = "mid";
+  }
+  if (!reason) return;
+
+  const now = Date.now();
+  if (now - (lastAlert[key] || 0) < c.cool) return;   // 같은 기기 반복 경고 방지
+  lastAlert[key] = now;
+  const a = { time: new Date(), name: d.name || "(이름 없음)", rssi, reason, key, level };
+  alerts.unshift(a);
+  ring(level);
+  renderAlerts();
+}
+
+/* =========================================================
+   3) 스캔 시작/중지
+   ========================================================= */
+async function startScan(){
+  if (demoTimer) { demoStart = Date.now(); return true; }   // 시연 모드: 가짜 신호 타이머 재시작
+  if (scanHandle) return true;
+  if (!support.scan) {
+    setStatus("alarm", "연속 스캔을 쓸 수 없습니다 (환경 점검 참고). '시연 모드'로 동작을 확인할 수 있습니다.");
+    return false;
+  }
+  try {
+    scanHandle = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true });
+    navigator.bluetooth.addEventListener("advertisementreceived", onAdvertisement);
+    return true;
+  } catch (e) {
+    setStatus("alarm", "스캔 시작 실패: " + e.message);
+    return false;
+  }
+}
+function stopScan(){
+  if (scanHandle) { try { scanHandle.stop(); } catch(e){} scanHandle = null;
+    navigator.bluetooth.removeEventListener("advertisementreceived", onAdvertisement); }
+}
+function stopDemo(){ if (demoTimer) { clearInterval(demoTimer); demoTimer = null; } }
+
+async function doBaseline(){
+  unlockAudio();
+  Object.keys(live).forEach(k => delete live[k]);
+  baseCollect = {};
+  if (!(await startScan())) return;
+  mode = "baseline"; lockUI(true);
+  let left = cfg().baseSec;
+  setStatus("base", `기준선 수집 중… ${left}초`);
+  baseTimer = setInterval(() => {
+    left--;
+    if (left > 0) { setStatus("base", `기준선 수집 중… ${left}초`); return; }
+    clearInterval(baseTimer); baseTimer = null;
+    baseline = { created: new Date().toLocaleString("ko-KR"), devices: baseCollect };
+    saveBaseline(baseline);
+    mode = "idle"; stopScan(); lockUI(false);
+    setStatus("", `기준선 저장 완료 (${Object.keys(baseCollect).length}개 기기)`);
+    renderBaseInfo(); scheduleRender();
+  }, 1000);
+}
+
+async function doMonitor(){
+  unlockAudio();
+  if (!baseline) { setStatus("alarm", "기준선이 없습니다. 먼저 '기준선 저장'을 하세요."); return; }
+  if (!(await startScan())) return;
+  mode = "monitor"; lockUI(true);
+  setStatus("mon", "감시 중 — 화면을 켜 둔 채로 두세요");
+  try { wakeLock = await navigator.wakeLock.request("screen"); } catch(e){}   // 화면 꺼짐 방지
+}
+
+function doStop(){
+  if (baseTimer) { clearInterval(baseTimer); baseTimer = null; }
+  stopScan(); stopDemo(); mode = "idle"; lockUI(false);
+  if (wakeLock) { wakeLock.release().catch(()=>{}); wakeLock = null; }
+  setStatus("", "중지됨");
+}
+
+// 실험 기능이 없어도 되는 방법: Chrome의 기기 선택창에 주변 기기가 나열됨 (눈으로 확인용)
+async function showChooser(){
+  if (!support.bt) { setStatus("alarm", "이 브라우저는 웹 블루투스를 지원하지 않습니다."); return; }
+  try {
+    const dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true });
+    setStatus("", `선택한 기기: ${dev.name || "(이름 없음)"} — 목록은 눈으로 확인하는 용도입니다`);
+  } catch (e) {
+    setStatus("", "목록 확인 후 닫았습니다.");
+  }
+}
+
+/* =========================================================
+   4) 시연 모드 (블루투스 없이 동작 확인용 가짜 신호)
+   ========================================================= */
+const DEMO = [
+  { id: "d1", name: "감독관 Galaxy", mfr: 0x75, rssi: -70, from: 0 },
+  { id: "d2", name: "", mfr: 0x4c, rssi: -82, from: 0 },
+  { id: "d3", name: "교실 프로젝터", mfr: 0x6, rssi: -78, from: 0 },
+  { id: "d4", name: "Ray-Ban Meta", mfr: 0x1ab, rssi: -74, from: 10 },   // 10초 뒤 등장
+  { id: "d5", name: "", mfr: 0x4c, rssi: -52, from: 18 },                // 18초 뒤 근거리 등장
+];
+function demoTick(){
+  const t = (Date.now() - demoStart) / 1000;
+  DEMO.forEach(dv => {
+    if (mode === "baseline" && dv.from > 0) return;    // 기준선 때는 기본 기기만
+    if (mode === "monitor" && t < dv.from) return;
+    let r = dv.rssi;
+    if (mode === "monitor" && dv.id === "d1" && t > 25) r = -50;     // 25초 뒤 가까이 이동
+    onAdvertisement({
+      name: dv.name, rssi: r + Math.round(Math.random() * 6 - 3),
+      device: { id: dv.id, name: dv.name },
+      manufacturerData: new Map([[dv.mfr, null]]),
+    });
+  });
+}
+function startDemo(){
+  stopScan(); stopDemo();
+  demoStart = Date.now();
+  demoTimer = setInterval(demoTick, 700);
+  setStatus("", "시연 모드 켜짐 — '기준선 저장' → '감시 시작' 순서로 눌러 보세요");
+}
+
+/* =========================================================
+   5) 알림 (소리 + 진동)
+   ========================================================= */
+function unlockAudio(){
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch(e){}
+}
+function ring(level){
+  try {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = level === "high" ? 1500 : 1000;
+    g.gain.value = 0.15; o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + 0.35);
+  } catch(e){}
+  try { navigator.vibrate && navigator.vibrate(level === "high" ? [300,100,300] : 300); } catch(e){}
+}
+
+/* =========================================================
+   6) 저장 (브라우저 localStorage — 이 기기·이 브라우저에만 저장)
+   ========================================================= */
+function loadBaseline(){ try { return JSON.parse(localStorage.getItem(STORE_KEY)); } catch(e){ return null; } }
+function saveBaseline(b){ try { localStorage.setItem(STORE_KEY, JSON.stringify(b)); } catch(e){} }
+function resetBaseline(){
+  baseline = null; try { localStorage.removeItem(STORE_KEY); } catch(e){}
+  renderBaseInfo(); scheduleRender(); setStatus("", "기준선을 지웠습니다.");
+}
+
+function alertsCsv(){
+  const rows = [["시각","기기","신호(dBm)","사유","식별키"]]
+    .concat(alerts.slice().reverse().map(a =>
+      [a.time.toLocaleTimeString("ko-KR"), a.name, a.rssi, a.reason, a.key]));
+  return rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+}
+function downloadCsv(){
+  const blob = new Blob(["﻿" + alertsCsv()], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `시험장경고_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+}
+async function copyCsv(){
+  const text = alertsCsv();
+  try { await navigator.clipboard.writeText(text); setStatus("", "경고 기록을 복사했습니다."); }
+  catch(e){ const box = $("copyBox"); box.style.display = "block"; box.value = text; box.select(); }
+}
+
+/* =========================================================
+   7) 화면 그리기
+   ========================================================= */
+function setStatus(cls, text){ $("status").className = "status " + cls; $("statusText").textContent = text; }
+function lockUI(on){
+  $("btnBase").disabled = on; $("btnMon").disabled = on; $("btnStop").disabled = !on;
+  $("btnDemo").disabled = on; $("btnReset").disabled = on;
+}
+function renderBaseInfo(){
+  $("sBase").textContent = baseline ? Object.keys(baseline.devices).length : 0;
+  $("baseInfo").textContent = baseline
+    ? `기준선: ${baseline.created} 저장 (${Object.keys(baseline.devices).length}개 기기)`
+    : "저장된 기준선 없음 — 휴대폰 수거 직후 '기준선 저장'을 누르세요.";
+}
+function renderAlerts(){
+  $("sAlert").textContent = alerts.length;
+  if (alerts.length && mode === "monitor") setStatus("alarm", `경고 ${alerts.length}건 — 최근: ${alerts[0].name}`);
+  $("alerts").innerHTML = alerts.length ? alerts.map(a =>
+    `<div class="alert ${a.level === "mid" ? "mid" : ""}"><b>${a.reason}</b> · ${esc(a.name)} · ${a.rssi}dBm<br>
+     <small>${a.time.toLocaleTimeString("ko-KR")}</small></div>`).join("")
+    : '<div class="empty">아직 경고가 없습니다.</div>';
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+let renderQueued = false;
+function scheduleRender(){ if (!renderQueued) { renderQueued = true; setTimeout(renderTable, 800); } }
+function renderTable(){
+  renderQueued = false;
+  const now = Date.now();
+  const rows = Object.entries(live)
+    .filter(([, d]) => now - d.last < 60000)                 // 최근 60초 내 감지된 것만
+    .map(([k, d]) => ({ k, d, r: avg(d.hist) }))
+    .sort((a, b) => b.r - a.r);
+  $("sLive").textContent = rows.length;
+  if (!rows.length) return;
+  $("tbody").innerHTML = rows.map(({ k, d, r }) => {
+    const sus = GLASSES_KEYWORDS.some(w => d.name.toLowerCase().includes(w));
+    const inBase = baseline && baseline.devices[k];
+    const tag = sus ? '<span class="tag t-sus">의심</span>'
+      : inBase ? '<span class="tag t-base">기준선</span>' : '<span class="tag t-new">신규</span>';
+    const w = Math.max(4, Math.min(60, (r + 100) * 1.2));
+    return `<tr><td>${tag}</td><td><span class="bar" style="width:${w}px"></span>${r}</td>
+      <td>${esc(d.name || "(이름 없음)")}</td><td>${d.mfr.join(",") || "-"}</td>
+      <td>${Math.round((now - d.last) / 1000)}초 전</td></tr>`;
+  }).join("");
+}
+setInterval(() => { if (mode !== "idle" || demoTimer) renderTable(); }, 3000);
+
+/* =========================================================
+   연결
+   ========================================================= */
+$("btnBase").onclick = doBaseline;
+$("btnMon").onclick = doMonitor;
+$("btnStop").onclick = doStop;
+$("btnChooser").onclick = showChooser;
+$("btnDemo").onclick = startDemo;
+$("btnReset").onclick = resetBaseline;
+$("btnCsv").onclick = downloadCsv;
+$("btnCopy").onclick = copyCsv;
+renderChecks(); renderBaseInfo();
+</script>
+</body>
+</html>
