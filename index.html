@@ -61,6 +61,11 @@
   .t-sus{background:var(--redbg);color:var(--red)}
   .bar{display:inline-block;height:6px;border-radius:3px;background:var(--blue);vertical-align:middle;margin-right:6px}
   .note{font-size:13px;color:var(--sub)}
+  tr.dev{cursor:pointer} tr.dev.open td{background:var(--bluebg)}
+  tr.detail td{white-space:normal;background:#fafbfc;padding:10px 12px}
+  .kv{display:grid;grid-template-columns:88px 1fr;gap:8px;padding:3px 0;font-size:13px;border-bottom:1px dashed var(--line)}
+  .kv:last-child{border-bottom:0}
+  .kv span{color:var(--sub)} .kv div{word-break:break-all}
   textarea{width:100%;height:90px;font:12px monospace;margin-top:8px;display:none}
 </style>
 </head>
@@ -133,6 +138,7 @@
   <section class="card">
     <h2>④ 감지된 기기 (가까운 순)</h2>
     <label style="font-size:14px;color:var(--ink);margin-bottom:6px"><input type="checkbox" id="fNear" checked> 가까운 기기만 보기 (-70dBm 이상)</label>
+    <p class="note" style="margin:0 0 6px">행을 누르면 상세 정보(기기 추정·서비스·제조사 데이터)가 펼쳐집니다.</p>
     <div class="tablewrap">
       <table>
         <thead><tr><th>상태</th><th>신호(평균)</th><th>기기 이름</th><th>제조사</th><th>마지막</th></tr></thead>
@@ -160,6 +166,27 @@ const MAKERS = {
 const GLASSES_MAKERS = new Set([0x1ab, 0x58e, 0x3c2, 0x60c, 0xd53]);
 const makerLabel = nums => nums.length
   ? nums.map(n => MAKERS[n] || "0x" + n.toString(16)).join(", ") : "-";
+// 서비스 UUID(16비트) → 등록 회사 (Bluetooth SIG 공식 목록에서 주요 회사만 추출)
+const SVC_MAKERS = {"fc75":"Xiaomi","fc79":"LG","fc84":"Tile","fc8f":"Bose","fc91":"Samsung","fc94":"Apple","fca0":"Apple","fcb1":"Google","fcb2":"Apple","fcc0":"Xiaomi","fccf":"Google","fcdc":"Amazon","fce1":"Sony","fcf1":"Google","fd1d":"Samsung","fd21":"Huawei","fd22":"Huawei","fd2a":"Sony","fd2d":"Xiaomi","fd31":"LG","fd36":"Google","fd41":"Amazon","fd43":"Apple","fd44":"Apple","fd4b":"Samsung","fd59":"Samsung","fd5a":"Samsung","fd5f":"Meta","fd62":"Google","fd63":"Google","fd69":"Samsung","fd6c":"Samsung","fd6f":"Apple","fd7e":"Samsung","fd82":"Sony","fd84":"Tile","fd87":"Google","fd8c":"Google","fd96":"Google","fd9a":"Huawei","fd9b":"Huawei","fd9c":"Huawei","fdaa":"Xiaomi","fdab":"Xiaomi","fdd0":"Huawei","fdd1":"Huawei","fdd2":"Bose","fddb":"Samsung","fde2":"Google","fdee":"Huawei","fdf0":"Google","fe00":"Amazon","fe03":"Amazon","fe08":"Microsoft","fe13":"Apple","fe15":"Amazon","fe19":"Google","fe1f":"Garmin","fe21":"Bose","fe25":"Apple","fe26":"Google","fe27":"Google","fe2c":"Google","fe35":"Huawei","fe36":"Huawei","fe45":"Snap","fe50":"Google","fe55":"Google","fe56":"Google","fe86":"Huawei","fe8a":"Apple","fe8b":"Apple","fe95":"Xiaomi","fe9f":"Google","fea0":"Google","feaa":"Google","feb2":"Microsoft","feb7":"Meta","feb8":"Meta","feb9":"LG","febe":"Bose","fec7":"Apple","fec8":"Apple","fec9":"Apple","feca":"Apple","fecb":"Apple","fecc":"Apple","fecd":"Apple","fece":"Apple","fecf":"Apple","fed0":"Apple","fed1":"Apple","fed2":"Apple","fed3":"Apple","fed4":"Apple","fed8":"Google","feec":"Tile","feed":"Tile","fef3":"Google","fef4":"Google"};
+// 표준 서비스 UUID → 의미
+const STD_SVC = {
+  "1800": "기본 접속 정보", "1801": "기본 속성", "180a": "기기 정보", "180f": "배터리",
+  "1812": "HID (키보드·마우스 등 입력장치)", "180d": "심박 측정 (스마트워치·밴드)",
+  "184e": "LE 오디오 스트림 (이어폰·스피커)", "1844": "볼륨 제어 (이어폰·스피커)",
+  "fe2c": "Google Fast Pair (안드로이드용 이어폰 등)", "fd6f": "노출 알림 (코로나 접촉 알림)",
+};
+// 스마트안경 회사(Meta·Snap)에 등록된 서비스 UUID
+const GLASSES_SVC = new Set(["fd5f", "feb7", "feb8", "fe45"]);
+// 기기 외형(Appearance) 대분류 = appearance 값 >> 6
+const APPEARANCE = { 1: "휴대폰", 2: "컴퓨터", 3: "시계", 5: "디스플레이", 6: "리모컨",
+  7: "안경", 8: "태그", 9: "열쇠고리", 10: "미디어 플레이어", 13: "심박계", 15: "입력장치(HID)",
+  33: "오디오 출력(이어폰·스피커)", 34: "오디오 입력" };
+// 애플 제조사 데이터의 첫 바이트(유형) → 의미 (공개된 리버스 엔지니어링 자료 기준, 추정)
+const APPLE_TYPES = { 0x02: "iBeacon", 0x05: "AirDrop", 0x07: "근접 페어링 (에어팟 등 이어폰)",
+  0x09: "AirPlay 대상", 0x0c: "Handoff (기기 간 이어하기)", 0x0f: "Nearby Action",
+  0x10: "Nearby Info (아이폰·아이패드·맥)", 0x12: "Find My (분실물 찾기·AirTag)" };
+// 마이크로소프트 제조사 데이터의 첫 바이트 → 의미 (추정)
+const MS_TYPES = { 0x01: "CDP 비콘 (Windows PC·Xbox 등)", 0x03: "Swift Pair (페어링 대기 주변기기)" };
 const NEAR_VIEW = -70;               // '가까운 기기만' 보기 기준
 const MERGE_SEC = 60;                // 이름 없는 근거리 경고 병합 시간
 const STORE_KEY = "examBleBaseline";
@@ -220,7 +247,12 @@ function onAdvertisement(ev){
     // 의심 판정: 이름에 안경 키워드가 있거나, 스마트안경 제조사 번호를 쓰는 경우
     nameSus: GLASSES_KEYWORDS.some(k => name.toLowerCase().includes(k)),
     makerSus: mfrNums.some(n => GLASSES_MAKERS.has(n)),
+    susWhy: mfrNums.some(n => GLASSES_MAKERS.has(n)) ? `제조사 번호 ${makerLabel(mfrNums)}` : "",
+    // ── 상세 정보 (행을 누르면 표시) ──
+    first: Date.now(), count: 0, ids: new Set(), uuids: new Set(),
+    mfrRaw: {}, tx: null, appearance: null,
   });
+  collectDetail(d, ev, mfrNums);
   d.hist.push(ev.rssi);
   if (d.hist.length > 5) d.hist.shift();
   d.last = Date.now();
@@ -236,6 +268,52 @@ function onAdvertisement(ev){
   scheduleRender();
 }
 
+// 광고 패킷의 세부 내용을 기기별로 모아 둠 (패킷마다 담긴 정보가 조금씩 다를 수 있음)
+const shortUuid = u => {
+  const m = /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/i.exec(u);
+  return m ? m[1].toLowerCase() : u.toLowerCase();
+};
+const toHex = dv => dv ? [...new Uint8Array(dv.buffer, dv.byteOffset, Math.min(dv.byteLength, 24))]
+  .map(b => b.toString(16).padStart(2, "0")).join(" ") : "";
+function collectDetail(d, ev, mfrNums){
+  d.count++;
+  if (ev.device && ev.device.id) d.ids.add(ev.device.id);
+  (ev.uuids || []).forEach(u => d.uuids.add(shortUuid(u)));
+  if (ev.serviceData) [...ev.serviceData.keys()].forEach(u => d.uuids.add(shortUuid(u)));
+  if (ev.txPower != null) d.tx = ev.txPower;
+  if (ev.appearance != null) d.appearance = ev.appearance;
+  mfrNums.forEach(n => { d.mfrRaw[n] = toHex(ev.manufacturerData.get(n)); });
+
+  // 이름·제조사 말고도, 서비스 UUID나 외형(안경)으로도 스마트안경 의심
+  if (!d.makerSus) {
+    const svc = [...d.uuids].find(u => GLASSES_SVC.has(u));
+    if (svc) { d.makerSus = true; d.susWhy = `서비스 UUID ${SVC_MAKERS[svc]}(${svc})`; }
+    else if (d.appearance != null && (d.appearance >> 6) === 7) { d.makerSus = true; d.susWhy = "기기 외형: 안경"; }
+  }
+}
+
+// 모은 정보로 "어떤 기기일지" 추정 문장 만들기
+function guessType(d){
+  const hints = [];
+  for (const [n, hex] of Object.entries(d.mfrRaw)) {
+    const id = +n, bytes = hex ? hex.split(" ").map(h => parseInt(h, 16)) : [];
+    if (id === 0x4c) {
+      // 애플 데이터는 [유형, 길이, 내용...]이 이어 붙은 구조(TLV)
+      for (let i = 0; i + 1 < bytes.length; i += 2 + bytes[i + 1]) {
+        if (APPLE_TYPES[bytes[i]]) hints.push("Apple " + APPLE_TYPES[bytes[i]]);
+      }
+    } else if (id === 0x6 && MS_TYPES[bytes[0]]) hints.push("Microsoft " + MS_TYPES[bytes[0]]);
+  }
+  d.uuids.forEach(u => {
+    if (GLASSES_SVC.has(u)) hints.push(`★스마트안경 회사 서비스 (${SVC_MAKERS[u]})`);
+    else if (STD_SVC[u]) hints.push(STD_SVC[u]);
+  });
+  if (d.appearance != null && APPEARANCE[d.appearance >> 6]) hints.push("외형: " + APPEARANCE[d.appearance >> 6]);
+  return [...new Set(hints)];
+}
+// 신호세기로 대략적인 거리 추정 (1m에서 -59dBm 가정, 실내 감쇠계수 2.5) — 매우 대략적
+const roughDist = r => { const m = Math.pow(10, (-59 - r) / 25); return m < 1 ? "1m 이내" : `약 ${m.toFixed(m < 10 ? 1 : 0)}m`; };
+
 // 기준선과 비교해 경고 여부 판단
 function evaluate(key, d, rssi){
   const c = cfg();
@@ -243,7 +321,7 @@ function evaluate(key, d, rssi){
   let reason = null, level = "high";
 
   // 의심기기는 기준선에 있어도 경고 (기준선 찍을 때 이미 안경을 쓰고 있었을 수 있음)
-  if (d.makerSus) reason = `★스마트안경 제조사 신호 (${d.maker})`;
+  if (d.makerSus) reason = `★스마트안경 의심 (${d.susWhy})`;
   else if (d.nameSus) reason = "★의심기기 (안경 계열 이름)";
   else if (!known) {
     if (rssi >= c.near && d.hist.length >= 3) { reason = "신규 근거리 신호"; level = "mid"; }
@@ -354,23 +432,25 @@ async function showChooser(){
    4) 시연 모드 (블루투스 없이 동작 확인용 가짜 신호)
    ========================================================= */
 const DEMO = [
-  { id: "d1", name: "감독관 Galaxy", mfr: 0x75, rssi: -70, from: 0 },
-  { id: "d2", name: "", mfr: 0x4c, rssi: -82, from: 0 },
-  { id: "d3", name: "교실 프로젝터", mfr: 0x6, rssi: -78, from: 0 },
-  { id: "d4", name: "", mfr: 0x1ab, rssi: -74, from: 10 },   // 10초 뒤 등장 (이름 없는 Meta 안경)
-  { id: "d5", name: "", mfr: 0x4c, rssi: -52, from: 18 },                // 18초 뒤 근거리 등장
+  { id: "d1", name: "감독관 Galaxy", mfr: 0x75, bytes: [0x42, 0x09, 0x81, 0x02], rssi: -70, from: 0, tx: 7 },
+  { id: "d2", name: "", mfr: 0x4c, bytes: [0x10, 0x05, 0x01, 0x18, 0x2a, 0x9b, 0x3c], rssi: -82, from: 0 },
+  { id: "d3", name: "교무실 노트북", mfr: 0x6, bytes: [0x01, 0x09, 0x20, 0x02, 0x7f], rssi: -78, from: 0 },
+  { id: "d4", name: "", mfr: 0x58e, bytes: [0x02, 0x11], uuids: ["0000fd5f-0000-1000-8000-00805f9b34fb"],
+    rssi: -74, from: 10 },                                     // 10초 뒤 등장 (이름 없는 Meta 안경)
+  { id: "d5", name: "", mfr: 0x4c, bytes: [0x07, 0x19, 0x01, 0x0e, 0x20, 0x75, 0xaa], rssi: -52, from: 18 },
 ];
 function demoTick(){
   const t = (Date.now() - demoStart) / 1000;
   DEMO.forEach(dv => {
-    if (mode === "baseline" && dv.from > 0) return;    // 기준선 때는 기본 기기만
+    if (mode !== "monitor" && dv.from > 0) return;     // 감시 전에는 기본 기기만
     if (mode === "monitor" && t < dv.from) return;
     let r = dv.rssi;
     if (mode === "monitor" && dv.id === "d1" && t > 25) r = -50;     // 25초 뒤 가까이 이동
     onAdvertisement({
       name: dv.name, rssi: r + Math.round(Math.random() * 6 - 3),
       device: { id: dv.id, name: dv.name },
-      manufacturerData: new Map([[dv.mfr, null]]),
+      manufacturerData: new Map([[dv.mfr, new DataView(new Uint8Array(dv.bytes).buffer)]]),
+      uuids: dv.uuids || [], txPower: dv.tx,
     });
   });
 }
@@ -459,7 +539,7 @@ function renderTable(){
   const rows = Object.entries(live)
     .filter(([, d]) => now - d.last < 60000)                 // 최근 60초 내 감지된 것만
     .map(([k, d]) => ({ k, d, r: avg(d.hist) }))
-    .filter(({ d, r }) => !$("fNear").checked || r >= NEAR_VIEW || d.nameSus || d.makerSus)
+    .filter(({ k, d, r }) => !$("fNear").checked || r >= NEAR_VIEW || d.nameSus || d.makerSus || k === selectedKey)
     .sort((a, b) => b.r - a.r);
   $("sLive").textContent = rows.length;
   if (!rows.length) {
@@ -473,12 +553,44 @@ function renderTable(){
     const tag = sus ? '<span class="tag t-sus">의심</span>'
       : inBase ? '<span class="tag t-base">기준선</span>' : '<span class="tag t-new">신규</span>';
     const w = Math.max(4, Math.min(60, (r + 100) * 1.2));
-    return `<tr><td>${tag}</td><td><span class="bar" style="width:${w}px"></span>${r}</td>
-      <td>${esc(d.name || "(이름 없음)")}</td><td>${esc(d.maker)}</td>
-      <td>${Math.round((now - d.last) / 1000)}초 전</td></tr>`;
+    const open = k === selectedKey;
+    return `<tr class="dev${open ? " open" : ""}" data-key="${esc(k)}"><td>${tag}</td>
+      <td><span class="bar" style="width:${w}px"></span>${r}</td>
+      <td>${open ? "▾" : "▸"} ${esc(d.name || "(이름 없음)")}</td><td>${esc(d.maker)}</td>
+      <td>${Math.round((now - d.last) / 1000)}초 전</td></tr>` + (open ? detailRow(k, d, r) : "");
   }).join("");
 }
 setInterval(() => { if (mode !== "idle" || demoTimer) renderTable(); }, 3000);
+
+let selectedKey = null;
+function detailRow(k, d, r){
+  const hints = guessType(d);
+  const svcList = [...d.uuids].map(u => {
+    const label = STD_SVC[u] || (SVC_MAKERS[u] ? SVC_MAKERS[u] + " 등록" : "");
+    return `${u}${label ? " (" + label + ")" : ""}`;
+  });
+  const mfrList = Object.entries(d.mfrRaw).map(([n, hex]) =>
+    `${MAKERS[+n] || "미등록"} (0x${(+n).toString(16)}): ${hex || "-"}`);
+  const item = (t, v) => `<div class="kv"><span>${t}</span><div>${v}</div></div>`;
+  return `<tr class="detail"><td colspan="5">
+    ${item("기기 추정", hints.length ? hints.map(h => esc(h)).join("<br>") : "정보 부족 (이름·서비스 정보 없음)")}
+    ${d.makerSus ? item("의심 근거", "<b class='no'>" + esc(d.susWhy) + "</b>") : ""}
+    ${item("대략 거리", roughDist(r) + " <small>(벽·몸에 따라 오차 큼)</small>")}
+    ${item("최근 신호", d.hist.join(", ") + " dBm")}
+    ${item("송신 세기", d.tx != null ? d.tx + " dBm" : "-")}
+    ${item("서비스 UUID", svcList.length ? svcList.map(esc).join("<br>") : "-")}
+    ${item("제조사 데이터", mfrList.length ? mfrList.map(esc).join("<br>") : "-")}
+    ${item("수신 패킷", `${d.count}개 · 처음 ${new Date(d.first).toLocaleTimeString("ko-KR")}`)}
+    ${item("주소 수", d.ids.size + "개" + (d.ids.size > 1 ? " (주소를 바꿔 가며 신호를 보냄)" : ""))}
+  </td></tr>`;
+}
+// 표의 행을 누르면 상세 열기/닫기 (행이 계속 새로 그려지므로 tbody에 한 번만 연결)
+$("tbody").addEventListener("click", e => {
+  const tr = e.target.closest("tr.dev");
+  if (!tr) return;
+  selectedKey = selectedKey === tr.dataset.key ? null : tr.dataset.key;
+  renderTable();
+});
 
 /* =========================================================
    연결
