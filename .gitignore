@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+baseline*.json
+scan_log_*.csv
+wifi_log_*.csv
